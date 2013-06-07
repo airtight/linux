@@ -1199,15 +1199,6 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 	/* cgroup information */
 	ph = ph_from_subsys(current->cgroups->subsys[phdusa_subsys_id]);
 #if USE_DRAM_AWARE
-	if(ph){
-		memdbg(2, "Weights: %d %d %d %d\n", bitmap_weight(&ph->dram_rankmap, 1<<sysctl_dram_rank_bits),
-		       bitmap_weight(&ph->dram_bankmap, 1<<sysctl_dram_bank_bits),
-		       bitmap_weight(&ph->color_map, 1<<sysctl_cache_color_bits),
-		       (bitmap_weight(&ph->dram_rankmap, 1<<sysctl_dram_rank_bits) &&
-		       bitmap_weight(&ph->dram_bankmap, 1<<sysctl_dram_bank_bits) &&
-			bitmap_weight(&ph->color_map, 1<<sysctl_cache_color_bits)) );
-	}
-
 	if (ph && (bitmap_weight(&ph->dram_rankmap, 1<<sysctl_dram_rank_bits) &&
 		   bitmap_weight(&ph->dram_bankmap, 1<<sysctl_dram_bank_bits) &&
 		   bitmap_weight(&ph->color_map, 1<<sysctl_cache_color_bits)))
@@ -1224,11 +1215,6 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 		}
 	}
 #endif
-	/* if (ph && bitmap_weight(&ph->colormap, 1<<sysctl_cache_color_bits) > 0){ */
-	/* 	use_color = 1; */
-	/* 	cmap = ph->colormap; */
-	/* } */
-	
 
 	/* check color cache */
 	if (use_color /*&& migratetype == MIGRATE_MOVABLE */ && order == 0) {
@@ -1903,7 +1889,12 @@ struct page *buffered_rmqueue(struct zone *preferred_zone,
 	ph = ph_from_subsys(current->cgroups->subsys[phdusa_subsys_id]);
 		
 again:
-	/* Skip PCP when physically-aware allocation is requested */
+	/* Skip PCP when physically-aware allocation is requested. If
+	 * phisically-aware allocation is required using the PhDUSA
+	 * interface, we always want to invoke non-buffered rmqueue
+	 * functions to look for the page that has to be allocated in
+	 * the colored page cache.
+	 */
 	if (likely(order == 0) && !ph) {
 		struct per_cpu_pages *pcp;
 		struct list_head *list;
