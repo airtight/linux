@@ -980,6 +980,7 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
 	struct mm_struct * mm = current->mm;
 	struct inode *inode;
 	vm_flags_t vm_flags;
+	unsigned long color;
 
 	/*
 	 * Does the application expect PROT_READ to imply PROT_EXEC?
@@ -993,6 +994,9 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
 
 	if (!len)
 		return -EINVAL;
+	
+	/* Save the color before addr gets modified */
+	color = addr;
 
 	if (!(flags & MAP_FIXED))
 		addr = round_hint_to_min(addr);
@@ -1101,7 +1105,7 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
 		}
 	}
 
-	return mmap_region(file, addr, len, flags, vm_flags, pgoff);
+	return mmap_region_color(file, addr, len, flags, vm_flags, pgoff, color);
 }
 
 SYSCALL_DEFINE6(mmap_pgoff, unsigned long, addr, unsigned long, len,
@@ -1214,9 +1218,13 @@ static inline int accountable_mapping(struct file *file, vm_flags_t vm_flags)
 	return (vm_flags & (VM_NORESERVE | VM_SHARED | VM_WRITE)) == VM_WRITE;
 }
 
-unsigned long mmap_region(struct file *file, unsigned long addr,
+/* In order to perform colored allocation, we need one more
+ * parameter. The wrapping below this function is kept for backward
+ * compatibility. */
+unsigned long mmap_region_color (struct file *file, unsigned long addr,
 			  unsigned long len, unsigned long flags,
-			  vm_flags_t vm_flags, unsigned long pgoff)
+			  vm_flags_t vm_flags, unsigned long pgoff,
+			  unsigned long color)
 {
 	struct mm_struct *mm = current->mm;
 	struct vm_area_struct *vma, *prev;
@@ -1289,6 +1297,22 @@ munmap_back:
 	vma->vm_page_prot = vm_get_page_prot(vm_flags);
 	vma->vm_pgoff = pgoff;
 	INIT_LIST_HEAD(&vma->anon_vma_chain);
+
+#ifdef CONFIG_AIRTIGHT_PHALLOC
+	/* Setup Rank, Bank and Color information if a colored
+	 * allocation is being requested */
+	if (flags & MAP_PHALLOC) {
+		/* Bits of addr are arranged as follows: 
+		   [0 -11] = cache color bitmask
+		   [12-21] = DRAM bank bitmask
+		   [22-31] = DRAM rank bitmask
+		 */
+		vma->color_mask = (color & 0x0FFF); 
+		vma->bank_mask = (color & (0x3FF << 12)) >> 12;
+		vma->rank_mask = (color & (0x3FF << 22)) >> 22;
+		vma->colored_allocation = 1;
+	}
+#endif
 
 	error = -EINVAL;	/* when rejecting VM_GROWSDOWN|VM_GROWSUP */
 
@@ -2240,6 +2264,7 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
 	vma->vm_flags = flags;
 	vma->vm_page_prot = vm_get_page_prot(flags);
 	vma_link(mm, vma, prev, rb_link, rb_parent);
+
 out:
 	perf_event_mmap(vma);
 	mm->total_vm += len >> PAGE_SHIFT;

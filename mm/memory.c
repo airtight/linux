@@ -3494,6 +3494,7 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	pud_t *pud;
 	pmd_t *pmd;
 	pte_t *pte;
+	int retval;
 
 	__set_current_state(TASK_RUNNING);
 
@@ -3560,7 +3561,17 @@ retry:
 	 */
 	pte = pte_offset_map(pmd, address);
 
-	return handle_pte_fault(mm, vma, address, pte, pmd, flags);
+#ifdef CONFIG_AIRTIGHT_PHALLOC
+        mm->alloc_vma = vma;
+#endif
+
+        retval = handle_pte_fault(mm, vma, address, pte, pmd, flags);
+
+#ifdef CONFIG_AIRTIGHT_PHALLOC
+        mm->alloc_vma = NULL;
+#endif
+
+        return retval;
 }
 
 #ifndef __PAGETABLE_PUD_FOLDED

@@ -855,11 +855,13 @@ config DEBUG_BLK_CGROUP
 	Enable some debugging help. Currently it exports additional stat
 	files in a cgroup which can be useful for debugging.
 
-config CGROUP_PHDUSA
-	bool "Enable Physical Driven User Space Allocator"
-	help
-	  Enables PhDUSA, a low-level physical page allocator that gives
-	  user control over the physical pages allocated to a process.
+config CGROUP_AIRTIGHT_PHALLOC
+	bool "Enable AiRTight Physical Aware Allocator"
+	depends on (AIRTIGHT_PHALLOC) 
+        help
+	  Enables the AiRTight allocator, a low-level physical page
+	  allocator that gives user control over the physical pages
+	  allocated to a process.
 
 endif # CGROUPS
 
@@ -1400,6 +1402,36 @@ config DEBUG_PERF_USE_VMALLOC
 	 Say N if unsure.
 
 endmenu
+
+menu "AiRTight Features"
+
+config AIRTIGHT_PHALLOC
+       bool "Enable AiRTight physical aware allocator"
+       default n
+       help
+	AiRTight provides advanced control over memory resource
+	allocation for RT platforms. This config enables the interface
+	to perform physical aware allocation from user-space
+	applications using the mmap syscall.
+	
+config AIRTIGHT_MEMGUARD
+       bool "Enable AiRTight MemGuard component"
+       default n
+       help
+	AiRTight provides advanced control over memory resource
+	allocation for RT platforms. This config enables the interface
+	to perform DRAM memory bandwidth reservation.
+	
+config AIRTIGHT_CLOCKDOWN
+       bool "Enable AiRTight Colored Lockdown component"
+       default n
+       help
+	AiRTight provides advanced control over memory resource
+	allocation for RT platforms. This config enables the interface
+	to perform shared CPU cache allocation.
+
+endmenu
+
 
 config VM_EVENT_COUNTERS
 	default y

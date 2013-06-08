@@ -279,6 +279,12 @@ struct vm_area_struct {
 #ifdef CONFIG_NUMA
 	struct mempolicy *vm_policy;	/* NUMA policy for the VMA */
 #endif
+
+#ifdef CONFIG_AIRTIGHT_PHALLOC
+	unsigned long rank_mask, bank_mask, color_mask;
+	int colored_allocation;
+#endif
+
 };
 
 struct core_thread {
@@ -405,6 +411,11 @@ struct mm_struct {
 	struct cpumask cpumask_allocation;
 #endif
 	struct uprobes_state uprobes_state;
+
+#ifdef CONFIG_AIRTIGHT_PHALLOC
+	struct vm_area_struct * alloc_vma;
+#endif
+
 };
 
 static inline void mm_init_cpumask(struct mm_struct *mm)

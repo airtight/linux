@@ -1419,9 +1419,14 @@ extern int install_special_mapping(struct mm_struct *mm,
 
 extern unsigned long get_unmapped_area(struct file *, unsigned long, unsigned long, unsigned long, unsigned long);
 
-extern unsigned long mmap_region(struct file *file, unsigned long addr,
+extern unsigned long mmap_region_color(struct file *file, unsigned long addr,
 	unsigned long len, unsigned long flags,
-	vm_flags_t vm_flags, unsigned long pgoff);
+	vm_flags_t vm_flags, unsigned long pgoff, 
+	unsigned long color);
+
+#define mmap_region(file, addr, len, flags, vm_flags, pgoff)		\
+	mmap_region_color(file, addr, len, flags, vm_flags, pgoff, 0)
+
 extern unsigned long do_mmap_pgoff(struct file *, unsigned long,
         unsigned long, unsigned long,
         unsigned long, unsigned long);

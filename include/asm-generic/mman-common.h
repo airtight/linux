@@ -25,6 +25,12 @@
 # define MAP_UNINITIALIZED 0x0		/* Don't support this flag */
 #endif
 
+#ifdef CONFIG_AIRTIGHT_PHALLOC
+# define MAP_PHALLOC    0x8000000
+#else
+# define MAP_PHALLOC    0x0
+#endif
+
 #define MS_ASYNC	1		/* sync memory asynchronously */
 #define MS_INVALIDATE	2		/* invalidate the caches */
 #define MS_SYNC		4		/* synchronous memory sync */

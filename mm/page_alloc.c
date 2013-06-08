@@ -63,19 +63,17 @@
 #include <asm/div64.h>
 #include "internal.h"
 
-#ifdef CONFIG_CGROUP_PHDUSA
-#include <linux/phdusa.h>
+#ifdef CONFIG_AIRTIGHT_PHALLOC
+#include <linux/at_phalloc.h>
 
 int memdbg_enable = 0;
 EXPORT_SYMBOL(memdbg_enable);
 
 int sysctl_cache_color_bits = DEFAULT_COLOR_BITS;
-#if USE_DRAM_AWARE
 int sysctl_dram_bank_shift = 14;
 int sysctl_dram_bank_bits = DEFAULT_BANK_BITS; /* 1<<3 = 8 */
 int sysctl_dram_rank_shift = 17;
 int sysctl_dram_rank_bits = DEFAULT_RANK_BITS; /* 1<<2 = 4 */
-#endif /* USE_DRAM_AWARE */
 
 #define memdbg(lvl, fmt, ...)					\
         do {                                                    \
@@ -162,10 +160,8 @@ static int color_page_alloc_show(struct seq_file *m, void *v)
 	}
 
 	seq_printf(m, "Cache colors: %d\n", 1 << sysctl_cache_color_bits);
-#if USE_DRAM_AWARE
 	seq_printf(m, "DRAM ranks: %d\n", 1 << sysctl_dram_rank_bits);
 	seq_printf(m, "DRAM banks: %d\n", 1 << sysctl_dram_bank_bits);
-#endif
         return 0;
 }
 static int color_page_alloc_open(struct inode *inode, struct file *filp)
@@ -201,7 +197,7 @@ static int __init color_page_alloc_debugfs(void)
                 goto fail;
         if (!debugfs_create_u32("debug_level", mode, dir, &memdbg_enable))
                 goto fail;
-#if USE_DRAM_AWARE
+#if CONFIG_AIRTIGHT_PHALLOC
 	if (!debugfs_create_u32("dram_bank_shift", mode, dir, &sysctl_dram_bank_shift))
 		goto fail;
 	if (!debugfs_create_u32("dram_bank_bits", mode, dir, &sysctl_dram_bank_bits))
@@ -210,7 +206,7 @@ static int __init color_page_alloc_debugfs(void)
 		goto fail;
 	if (!debugfs_create_u32("dram_rank_bits", mode, dir, &sysctl_dram_rank_bits))
 		goto fail;
-#endif /* USE_DRAM_AWARE */
+#endif /* CONFIG_AIRTIGHT_PHALLOC */
 	if (!debugfs_create_u32("cache_color_bits", mode, dir, &sysctl_cache_color_bits))
 		goto fail;
         return 0;
@@ -221,7 +217,7 @@ fail:
 
 late_initcall(color_page_alloc_debugfs);
 
-#endif /* CONFIG_CGROUP_PHDUSA */
+#endif /* CONFIG_AIRTIGHT_PHALLOC */
 
 #ifdef CONFIG_USE_PERCPU_NUMA_NODE_ID
 DEFINE_PER_CPU(int, numa_node);
@@ -1022,7 +1018,7 @@ static int prep_new_page(struct page *page, int order, gfp_t gfp_flags)
 	return 0;
 }
 
-#ifdef CONFIG_CGROUP_PHDUSA
+#ifdef CONFIG_AIRTIGHT_PHALLOC
 
 
 /* debug */
@@ -1125,14 +1121,10 @@ static struct page *ccache_find_cmap(struct zone *zone, COLOR_BITMAP(cmap),
 	
 	page = list_entry(zone->color_list[c].next, struct page, lru);
 	
-#if USE_DRAM_AWARE
 	memdbg(4, "found pfn %ld(0x%08llx)(color=%d,rank=%d,bank=%d,zone=%s)\n", 
 	       page_to_pfn(page), (u64)page_to_phys(page),
 	       c, COLOR_TO_DRAM_RANK(c), COLOR_TO_DRAM_BANK(c), zone->name);
-#else
-	memdbg(4, "found pfn %ld (color=%d,zone=%s)\n", 
-	       page_to_pfn(page), c, zone->name);
-#endif
+
 	BUG_ON(page_to_color(page) != c);
 
 	/* remove from the zone->color_list[color] */
@@ -1166,7 +1158,7 @@ update_stat(struct color_stat *stat, struct page *page, int iters)
 
 	stat->tot_cnt++;
 
-	memdbg(2, "order %ld pfn %ld(0x%08llx) color %d iters %d in %lld ns\n",
+	memdbg(5, "order %ld pfn %ld(0x%08llx) color %d iters %d in %lld ns\n",
 	       page_order(page), page_to_pfn(page), (u64)page_to_phys(page),
 	       (int)page_to_color(page),
 	       iters, dur.tv64);
@@ -1187,34 +1179,75 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 	int use_color = 0;
 	COLOR_BITMAP(cmap);
 	ktime_t start = ktime_set(0,0);
-	struct phdusa *ph;
+	struct phalloc *ph;
 	struct color_stat *c_stat = &color_page_alloc.stat[0];
 	struct color_stat *n_stat = &color_page_alloc.stat[1];
 	struct color_stat *f_stat = &color_page_alloc.stat[2];
+
+	unsigned long rank_mask, bank_mask, color_mask;
+	struct vm_area_struct * alloc_vma = NULL;
+
 	int iters = 0;
 	
 	if (memdbg_enable > 0)
 		c_stat->start = n_stat->start = f_stat->start = ktime_get();
 
+	/* Retrieve the VMA we are allocating for */
+	if(current && current->mm && (alloc_vma = current->mm->alloc_vma)) {
+		if(alloc_vma->colored_allocation) {
+			use_color = 1;
+			rank_mask = alloc_vma->rank_mask;
+			bank_mask = alloc_vma->bank_mask;
+			color_mask = alloc_vma->color_mask;
+			memdbg(1, "Requested mmap colored allocation on rank 0x%lx, bank 0x%lx, color 0x%lx\n", rank_mask, bank_mask, color_mask);
+		}
+	}
+
+#ifdef CONFIG_CGROUP_AIRTIGHT_PHALLOC
 	/* cgroup information */
-	ph = ph_from_subsys(current->cgroups->subsys[phdusa_subsys_id]);
-#if USE_DRAM_AWARE
+	ph = ph_from_subsys(current->cgroups->subsys[phalloc_subsys_id]);
 	if (ph && (bitmap_weight(&ph->dram_rankmap, 1<<sysctl_dram_rank_bits) &&
 		   bitmap_weight(&ph->dram_bankmap, 1<<sysctl_dram_bank_bits) &&
 		   bitmap_weight(&ph->color_map, 1<<sysctl_cache_color_bits)))
 	{
-		int rank, bank, color;
 		use_color = 1;
+
+		/* An allocation policy is defined for both the CGROUP
+		 * and the VMA. Need to calculate the intersection of
+		 * the two policies. */
+		if(alloc_vma->colored_allocation &&
+		   bitmap_intersects(&ph->dram_rankmap, &rank_mask, 1<<sysctl_dram_rank_bits) &&
+		   bitmap_intersects(&ph->dram_bankmap, &bank_mask, 1<<sysctl_dram_bank_bits) &&
+		   bitmap_intersects(&ph->color_map, &color_mask, 1<<sysctl_cache_color_bits))
+		{
+			bitmap_and(&rank_mask, &ph->dram_rankmap, &rank_mask, 1<<sysctl_dram_rank_bits);
+			bitmap_and(&bank_mask, &ph->dram_bankmap, &bank_mask, 1<<sysctl_dram_bank_bits);
+			bitmap_and(&color_mask, &ph->color_map, &color_mask, 1<<sysctl_cache_color_bits);
+		} else {
+			rank_mask = ph->dram_rankmap;
+			bank_mask = ph->dram_bankmap;
+			color_mask = ph->color_map;
+		}
+	}
+	
+#else 
+	ph = NULL;
+#endif
+
+	/* Once determined the final allocation policy, go ahead and
+	 * compute the allowed bins, filling the cmap bitmap  */
+	if (use_color) {
+		int rank, bank, color;
 		bitmap_zero(cmap, MAX_CACHE_BINS);
-		for_each_set_bit(rank, &ph->dram_rankmap, 1<<sysctl_dram_rank_bits) {
-			for_each_set_bit(bank, &ph->dram_bankmap, 1<<sysctl_dram_bank_bits) {
-				for_each_set_bit(color, &ph->color_map, 1<<sysctl_cache_color_bits) {
+		for_each_set_bit(rank, &rank_mask, 1<<sysctl_dram_rank_bits) {
+			for_each_set_bit(bank, &bank_mask, 1<<sysctl_dram_bank_bits) {
+				for_each_set_bit(color, &color_mask, 1<<sysctl_cache_color_bits) {
 					bitmap_set(cmap, dram_addr_to_color(rank, bank, color), 1);
 				}
 			}
 		}
 	}
-#endif
+
 
 	/* check color cache */
 	if (use_color /*&& migratetype == MIGRATE_MOVABLE */ && order == 0) {
@@ -1307,7 +1340,7 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 	       zone->name, order, migratetype, ktime_sub(ktime_get(), start).tv64);
 	return NULL;
 }
-#else /* !CONFIG_CGROUP_PHDUSA */
+#else /* !CONFIG_AIRTIGHT_PHALLOC */
 
 static inline
 struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
@@ -1334,7 +1367,7 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 	
 	return NULL;
 }
-#endif /* CONFIG_CGROUP_PHDUSA */
+#endif /* CONFIG_AIRTIGHT_PHALLOC */
 
 /*
  * This array describes the order lists are fallen back to when
@@ -1884,13 +1917,17 @@ struct page *buffered_rmqueue(struct zone *preferred_zone,
 	unsigned long flags;
 	struct page *page;
 	int cold = !!(gfp_flags & __GFP_COLD);
-	struct phdusa * ph;
+	struct phalloc * ph;
 	
-	ph = ph_from_subsys(current->cgroups->subsys[phdusa_subsys_id]);
+#ifdef CONFIG_CGROUP_AIRTIGHT_PHALLOC
+	ph = ph_from_subsys(current->cgroups->subsys[phalloc_subsys_id]);
+#else
+	ph = NULL;
+#endif
 		
 again:
 	/* Skip PCP when physically-aware allocation is requested. If
-	 * phisically-aware allocation is required using the PhDUSA
+	 * phisically-aware allocation is required using the PHALLOC
 	 * interface, we always want to invoke non-buffered rmqueue
 	 * functions to look for the page that has to be allocated in
 	 * the colored page cache.
@@ -4257,13 +4294,13 @@ static void __meminit zone_init_free_lists(struct zone *zone)
 {
 	int order, t;
 
-#ifdef CONFIG_CGROUP_PHDUSA
+#ifdef CONFIG_AIRTIGHT_PHALLOC
 	int c;
 	for (c = 0; c < MAX_CACHE_BINS; c++) {
 		INIT_LIST_HEAD(&zone->color_list[c]);
 	}
 	bitmap_zero(zone->color_bitmap, MAX_CACHE_BINS);
-#endif /* CONFIG_CGROUP_PHDUSA */
+#endif /* CONFIG_AIRTIGHT_PHALLOC */
 
 	for_each_migratetype_order(order, t) {
 		INIT_LIST_HEAD(&zone->free_area[order].free_list[t]);
@@ -6380,9 +6417,11 @@ __offline_isolated_pages(unsigned long start_pfn, unsigned long end_pfn)
 		return;
 	zone = page_zone(pfn_to_page(pfn));
 	spin_lock_irqsave(&zone->lock, flags);
-#ifdef CONFIG_CGROUP_PHDUSA
+
+#ifdef CONFIG_AIRTIGHT_PHALLOC
 	ccache_flush(zone);
 #endif
+
 	pfn = start_pfn;
 	while (pfn < end_pfn) {
 		if (!pfn_valid(pfn)) {
